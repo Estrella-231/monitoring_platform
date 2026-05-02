@@ -1,0 +1,841 @@
+────────────────────────────────────────────────────────────────────────────
+
+
+  软件名称: 冷链数据监测平台
+  版  本  号: V1.0
+  文档标题: 代码说明文档（第1-14页）
+  代码范围: 全局第 1 行 - 第 700 行 (共 700 行)
+  文档页数: 16 页
+
+  文档结构:
+    ① 封面页 ............................... 第 1 页
+    ② 目录页 ............................... 第 2 页
+    ③ 代码页（第 1 - 14 页）...... 第 3 - 16 页
+  代码行数: 700 行（每页 50 行）
+
+────────────────────────────────────────────────────────────────────────────
+                                                  第 1 页
+
+────────────────────────────────────────────────────────────────────────────
+
+                    代码说明文档（第1-14页）
+
+  代码行数: 700 行（每页 50 行）
+  代码范围: 全局第 1 行 - 第 700 行
+────────────────────────────────────────────────────────────────────────────
+
+  文件名                                      代码页             行号范围           
+  ──────────────────────────────────────── ─────────────── ───────────────
+  backend/__init__.py                      第3页             第1-1行
+  backend/auth.py                          第3页             第2-39行
+  backend/models.py                        第3-7页           第40-224行
+  backend/stores.py                        第7-8页           第225-263行
+  backend/services.py                      第8-15页          第264-619行
+  backend/main.py                          第15-16页         第620-700行
+
+────────────────────────────────────────────────────────────────────────────
+                                                  第 2 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+      1 |            # ====== backend/__init__.py ======
+      1 | 
+      2 |            # ====== backend/auth.py ======
+      2 | """
+      3 | JWT 认证
+      4 | """
+      5 | import os
+      6 | from datetime import datetime, timedelta, timezone
+      7 | from typing import Any, Dict, Optional
+      8 | 
+      9 | from jose import JWTError, jwt
+     10 | from passlib.context import CryptContext
+     11 | 
+     12 | SECRET_KEY = os.getenv("JWT_SECRET_KEY", "cold-chain-demo-secret-key-2026")
+     13 | ALGORITHM = "HS256"
+     14 | TOKEN_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
+     15 | 
+     16 | pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+     17 | 
+     18 | 
+     19 | def hash_password(password: str) -> str:
+     20 |     return pwd_context.hash(password)
+     21 | 
+     22 | 
+     23 | def verify_password(password: str, hashed: str) -> bool:
+     24 |     return pwd_context.verify(password, hashed)
+     25 | 
+     26 | 
+     27 | def create_token(data: Dict[str, Any]) -> str:
+     28 |     to_encode = data.copy()
+     29 |     expire = datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS)
+     30 |     to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
+     31 |     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+     32 | 
+     33 | 
+     34 | def verify_token(token: str) -> Optional[Dict[str, Any]]:
+     35 |     try:
+     36 |         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+     37 |         return payload
+     38 |     except JWTError:
+     39 |         return None
+     40 |            # ====== backend/models.py ======
+     40 | """
+     41 | 数据模型定义
+     42 | """
+     43 | from datetime import datetime
+     44 | from typing import Any, Dict, List, Optional
+     45 | 
+     46 | from pydantic import BaseModel, Extra, Field
+     47 | 
+     48 | 
+     49 | class SensorPayload(BaseModel):
+     50 |     temperature: Optional[float] = Field(default=None, description="温度（摄氏度）")
+────────────────────────────────────────────────────────────────────────────
+                                                  第 3 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+     51 |     humidity: Optional[float] = Field(default=None, description="湿度（百分比）")
+     52 | 
+     53 |     class Config:
+     54 |         extra = Extra.allow
+     55 | 
+     56 | 
+     57 | class SensorDataIn(BaseModel):
+     58 |     device_id: str
+     59 |     timestamp: datetime
+     60 |     sensors: SensorPayload
+     61 | 
+     62 | 
+     63 | class AlertRecord(BaseModel):
+     64 |     device_id: str
+     65 |     alert_type: str
+     66 |     metric: str
+     67 |     message: str
+     68 |     level: str
+     69 |     threshold: float
+     70 |     current_value: float
+     71 |     created_at: str
+     72 |     event_at: str
+     73 | 
+     74 | 
+     75 | class StatsResponse(BaseModel):
+     76 |     total_records: int
+     77 |     avg_temperature: float
+     78 |     avg_humidity: float
+     79 |     alert_count: int
+     80 | 
+     81 | 
+     82 | class DeviceSnapshot(BaseModel):
+     83 |     device_id: str
+     84 |     timestamp: str
+     85 |     temperature: Optional[float]
+     86 |     humidity: Optional[float]
+     87 |     status: str
+     88 |     sensors: Dict[str, Any]
+     89 | 
+     90 | 
+     91 | class DashboardSummary(StatsResponse):
+     92 |     online_devices: int
+     93 | 
+     94 | 
+     95 | class TrendPoint(BaseModel):
+     96 |     timestamp: str
+     97 |     temperature: Optional[float]
+     98 |     humidity: Optional[float]
+     99 | 
+    100 | 
+────────────────────────────────────────────────────────────────────────────
+                                                  第 4 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    101 | class DeviceTrend(BaseModel):
+    102 |     device_id: str
+    103 |     points: List[TrendPoint]
+    104 | 
+    105 | 
+    106 | class DashboardTrends(BaseModel):
+    107 |     selected_device_id: Optional[str]
+    108 |     series: List[DeviceTrend]
+    109 | 
+    110 | 
+    111 | class DashboardResponse(BaseModel):
+    112 |     summary: DashboardSummary
+    113 |     devices: List[DeviceSnapshot]
+    114 |     alerts: List[AlertRecord]
+    115 |     trends: DashboardTrends
+    116 | 
+    117 | 
+    118 | # --- 新增模型 ---
+    119 | 
+    120 | class DeviceInfo(BaseModel):
+    121 |     """设备注册信息"""
+    122 |     device_id: str
+    123 |     name: str = ""
+    124 |     model: str = ""
+    125 |     location: str = ""
+    126 |     install_date: str = ""
+    127 |     status: str = "active"  # active, inactive, maintenance
+    128 | 
+    129 | 
+    130 | class DeviceCreate(BaseModel):
+    131 |     device_id: str
+    132 |     name: str = ""
+    133 |     model: str = ""
+    134 |     location: str = ""
+    135 |     install_date: str = ""
+    136 | 
+    137 | 
+    138 | class AlertRule(BaseModel):
+    139 |     id: str
+    140 |     device_id: str  # "*" 表示全局规则
+    141 |     metric: str  # temperature, humidity
+    142 |     warning_threshold: float
+    143 |     critical_threshold: float
+    144 |     enabled: bool = True
+    145 | 
+    146 | 
+    147 | class AlertRuleCreate(BaseModel):
+    148 |     device_id: str = "*"
+    149 |     metric: str
+    150 |     warning_threshold: float
+────────────────────────────────────────────────────────────────────────────
+                                                  第 5 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    151 |     critical_threshold: float
+    152 |     enabled: bool = True
+    153 | 
+    154 | 
+    155 | class User(BaseModel):
+    156 |     id: str
+    157 |     username: str
+    158 |     password_hash: str
+    159 |     role: str = "viewer"  # admin, viewer
+    160 |     created_at: str
+    161 | 
+    162 | 
+    163 | class UserCreate(BaseModel):
+    164 |     username: str
+    165 |     password: str
+    166 |     role: str = "viewer"
+    167 | 
+    168 | 
+    169 | class UserOut(BaseModel):
+    170 |     id: str
+    171 |     username: str
+    172 |     role: str
+    173 |     created_at: str
+    174 | 
+    175 | 
+    176 | class LoginRequest(BaseModel):
+    177 |     username: str
+    178 |     password: str
+    179 | 
+    180 | 
+    181 | class LoginResponse(BaseModel):
+    182 |     token: str
+    183 |     user: UserOut
+    184 | 
+    185 | 
+    186 | class ReportDaily(BaseModel):
+    187 |     date: str
+    188 |     device_id: str
+    189 |     max_temperature: Optional[float]
+    190 |     min_temperature: Optional[float]
+    191 |     avg_temperature: Optional[float]
+    192 |     max_humidity: Optional[float]
+    193 |     min_humidity: Optional[float]
+    194 |     avg_humidity: Optional[float]
+    195 |     alert_count: int
+    196 |     sample_count: int
+    197 | 
+    198 | 
+    199 | class AuditLog(BaseModel):
+    200 |     id: str
+────────────────────────────────────────────────────────────────────────────
+                                                  第 6 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    201 |     user: str
+    202 |     action: str  # create, update, delete
+    203 |     resource: str
+    204 |     resource_id: str
+    205 |     detail: str = ""
+    206 |     timestamp: str
+    207 |     ip: str = ""
+    208 | 
+    209 | 
+    210 | class SystemSettings(BaseModel):
+    211 |     upload_interval_seconds: int = 30
+    212 |     data_retention_days: int = 90
+    213 |     online_window_minutes: int = 10
+    214 |     default_temp_threshold: float = 10.0
+    215 |     default_humidity_threshold: float = 90.0
+    216 | 
+    217 | 
+    218 | class NotificationChannel(BaseModel):
+    219 |     id: str
+    220 |     name: str
+    221 |     channel_type: str  # email, webhook
+    222 |     config: Dict[str, str] = {}  # e.g. {"email": "a@b.com"} or {"url": "https://..."}
+    223 |     enabled: bool = True
+    224 |     alert_level: str = "warning"  # warning, critical
+    225 |            # ====== backend/stores.py ======
+    225 | """
+    226 | 内存数据存储
+    227 | """
+    228 | from typing import Any, Dict, List
+    229 | 
+    230 | from backend.models import AlertRecord, AlertRule, AuditLog, DeviceInfo, NotificationChannel, SystemSettings, User
+    231 | 
+    232 | # 传感器数据
+    233 | sensor_data_store: List[Dict[str, Any]] = []
+    234 | alerts_store: List[AlertRecord] = []
+    235 | 
+    236 | # 设备管理
+    237 | devices_store: Dict[str, DeviceInfo] = {}
+    238 | 
+    239 | # 告警规则
+    240 | alert_rules_store: List[AlertRule] = []
+    241 | 
+    242 | # 用户
+    243 | users_store: Dict[str, User] = {}
+    244 | 
+    245 | # 审计日志
+    246 | audit_logs_store: List[AuditLog] = []
+    247 | 
+    248 | # 系统配置
+    249 | system_settings = SystemSettings()
+    250 | 
+────────────────────────────────────────────────────────────────────────────
+                                                  第 7 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    251 | # 通知渠道
+    252 | notification_channels_store: List[NotificationChannel] = []
+    253 | 
+    254 | 
+    255 | def clear_all():
+    256 |     """清空所有数据（仅开发模式）"""
+    257 |     sensor_data_store.clear()
+    258 |     alerts_store.clear()
+    259 |     devices_store.clear()
+    260 |     alert_rules_store.clear()
+    261 |     users_store.clear()
+    262 |     audit_logs_store.clear()
+    263 |     notification_channels_store.clear()
+    264 |            # ====== backend/services.py ======
+    264 | """
+    265 | 业务逻辑
+    266 | """
+    267 | import csv
+    268 | import io
+    269 | import random
+    270 | import uuid
+    271 | from datetime import datetime, timedelta, timezone
+    272 | from typing import Any, Dict, List, Optional
+    273 | 
+    274 | from backend.models import (
+    275 |     AlertRecord, AlertRule, AlertRuleCreate, AuditLog, DeviceCreate,
+    276 |     DeviceInfo, NotificationChannel, ReportDaily, SystemSettings, TrendPoint,
+    277 | )
+    278 | from backend.stores import (
+    279 |     alert_rules_store, alerts_store, audit_logs_store,
+    280 |     devices_store, notification_channels_store, sensor_data_store,
+    281 |     system_settings,
+    282 | )
+    283 | 
+    284 | 
+    285 | def utc_now() -> datetime:
+    286 |     return datetime.now(timezone.utc)
+    287 | 
+    288 | 
+    289 | def isoformat_utc(dt: Optional[datetime] = None) -> str:
+    290 |     return (dt or utc_now()).isoformat()
+    291 | 
+    292 | 
+    293 | def numeric_value(value: Any) -> Optional[float]:
+    294 |     if value is None or isinstance(value, bool):
+    295 |         return None
+    296 |     try:
+    297 |         return float(value)
+    298 |     except (TypeError, ValueError):
+    299 |         return None
+    300 | 
+────────────────────────────────────────────────────────────────────────────
+                                                  第 8 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    301 | 
+    302 | def _get_effective_threshold(device_id: str, metric: str) -> tuple:
+    303 |     """获取设备生效的阈值：设备级规则 > 全局规则 > 默认值"""
+    304 |     for rule in alert_rules_store:
+    305 |         if rule.device_id == device_id and rule.metric == metric and rule.enabled:
+    306 |             return rule.warning_threshold, rule.critical_threshold
+    307 |     for rule in alert_rules_store:
+    308 |         if rule.device_id == "*" and rule.metric == metric and rule.enabled:
+    309 |             return rule.warning_threshold, rule.critical_threshold
+    310 |     if metric == "temperature":
+    311 |         return system_settings.default_temp_threshold, system_settings.default_temp_threshold + 5
+    312 |     return system_settings.default_humidity_threshold, system_settings.default_humidity_threshold + 10
+    313 | 
+    314 | 
+    315 | def classify_metric(value: Optional[float], warning_threshold: float, critical_threshold: float) -> str:
+    316 |     if value is None:
+    317 |         return "normal"
+    318 |     if value > critical_threshold:
+    319 |         return "critical"
+    320 |     if value > warning_threshold:
+    321 |         return "warning"
+    322 |     return "normal"
+    323 | 
+    324 | 
+    325 | def classify_status(sensors: Dict[str, Any]) -> str:
+    326 |     temp = numeric_value(sensors.get("temperature"))
+    327 |     hum = numeric_value(sensors.get("humidity"))
+    328 |     t_warn, t_crit = _get_effective_threshold("", "temperature")
+    329 |     h_warn, h_crit = _get_effective_threshold("", "humidity")
+    330 | 
+    331 |     temp_state = classify_metric(temp, t_warn, t_crit)
+    332 |     hum_state = classify_metric(hum, h_warn, h_crit)
+    333 |     if "critical" in {temp_state, hum_state}:
+    334 |         return "critical"
+    335 |     if "warning" in {temp_state, hum_state}:
+    336 |         return "warning"
+    337 |     return "normal"
+    338 | 
+    339 | 
+    340 | def build_alerts(record: Dict[str, Any], device_id: str) -> List[AlertRecord]:
+    341 |     alerts = []
+    342 |     event_at = record["timestamp"]
+    343 |     created_at = isoformat_utc()
+    344 | 
+    345 |     for metric, label, unit in [("temperature", "温度", "°C"), ("humidity", "湿度", "%")]:
+    346 |         current_value = numeric_value(record["sensors"].get(metric))
+    347 |         warn_threshold, crit_threshold = _get_effective_threshold(device_id, metric)
+    348 |         if current_value is None or current_value <= warn_threshold:
+    349 |             continue
+    350 |         level = classify_metric(current_value, warn_threshold, crit_threshold)
+────────────────────────────────────────────────────────────────────────────
+                                                  第 9 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    351 |         alerts.append(AlertRecord(
+    352 |             device_id=device_id,
+    353 |             alert_type=metric,
+    354 |             metric=metric,
+    355 |             message=f"{label}过高: {current_value:.1f}{unit}（阈值 {warn_threshold:.1f}{unit}）",
+    356 |             level=level,
+    357 |             threshold=warn_threshold,
+    358 |             current_value=current_value,
+    359 |             created_at=created_at,
+    360 |             event_at=event_at,
+    361 |         ))
+    362 |     return alerts
+    363 | 
+    364 | 
+    365 | def store_sensor_record(device_id: str, timestamp: str, sensors: Dict[str, Any]) -> Dict[str, Any]:
+    366 |     record = {"device_id": device_id, "timestamp": timestamp, "sensors": sensors}
+    367 |     sensor_data_store.append(record)
+    368 |     for alert in build_alerts(record, device_id):
+    369 |         alerts_store.append(alert)
+    370 |     return record
+    371 | 
+    372 | 
+    373 | def get_latest_records() -> Dict[str, Dict[str, Any]]:
+    374 |     latest = {}
+    375 |     for record in sensor_data_store:
+    376 |         did = record["device_id"]
+    377 |         if did not in latest or record["timestamp"] > latest[did]["timestamp"]:
+    378 |             latest[did] = record
+    379 |     return latest
+    380 | 
+    381 | 
+    382 | def seed_demo_data():
+    383 |     if sensor_data_store:
+    384 |         return
+    385 |     randomizer = random.Random(42)
+    386 |     base_time = utc_now() - timedelta(minutes=55)
+    387 |     device_offsets = {
+    388 |         "sensor_001": (4.0, 72.0),
+    389 |         "sensor_002": (6.5, 76.0),
+    390 |         "sensor_003": (9.0, 87.0),
+    391 |         "sensor_004": (11.5, 94.0),
+    392 |     }
+    393 |     for step in range(12):
+    394 |         event_time = base_time + timedelta(minutes=5 * step)
+    395 |         for did, (tb, hb) in device_offsets.items():
+    396 |             sensors = {
+    397 |                 "temperature": round(tb + randomizer.uniform(-1.2, 1.4), 1),
+    398 |                 "humidity": round(hb + randomizer.uniform(-4.0, 5.0), 1),
+    399 |                 "gpio_1": 0,
+    400 |                 "gpio_2": 1,
+────────────────────────────────────────────────────────────────────────────
+                                                  第 10 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    401 |             }
+    402 |             store_sensor_record(did, isoformat_utc(event_time), sensors)
+    403 | 
+    404 |     # 预置设备信息
+    405 |     for did, (name, loc, model) in {
+    406 |         "sensor_001": ("冷库A-1号", "上海市浦东新区", "DHT11"),
+    407 |         "sensor_002": ("冷库A-2号", "上海市浦东新区", "DHT11"),
+    408 |         "sensor_003": ("冷库B-1号", "上海市松江区", "DHT22"),
+    409 |         "sensor_004": ("冷库B-2号", "上海市松江区", "DHT22"),
+    410 |     }.items():
+    411 |         if did not in devices_store:
+    412 |             devices_store[did] = DeviceInfo(
+    413 |                 device_id=did, name=name, model=model, location=loc,
+    414 |                 install_date="2026-01-15", status="active",
+    415 |             )
+    416 | 
+    417 | 
+    418 | # --- 设备管理 ---
+    419 | 
+    420 | def list_devices() -> List[DeviceInfo]:
+    421 |     return list(devices_store.values())
+    422 | 
+    423 | 
+    424 | def create_device(data: DeviceCreate) -> DeviceInfo:
+    425 |     dev = DeviceInfo(device_id=data.device_id, name=data.name, model=data.model,
+    426 |                      location=data.location, install_date=data.install_date)
+    427 |     devices_store[data.device_id] = dev
+    428 |     return dev
+    429 | 
+    430 | 
+    431 | def update_device(device_id: str, data: DeviceCreate) -> Optional[DeviceInfo]:
+    432 |     if device_id not in devices_store:
+    433 |         return None
+    434 |     dev = devices_store[device_id]
+    435 |     devices_store[device_id] = DeviceInfo(
+    436 |         device_id=device_id, name=data.name or dev.name,
+    437 |         model=data.model or dev.model, location=data.location or dev.location,
+    438 |         install_date=data.install_date or dev.install_date, status=dev.status,
+    439 |     )
+    440 |     return devices_store[device_id]
+    441 | 
+    442 | 
+    443 | def delete_device(device_id: str) -> bool:
+    444 |     if device_id in devices_store:
+    445 |         del devices_store[device_id]
+    446 |         return True
+    447 |     return False
+    448 | 
+    449 | 
+    450 | # --- 告警规则 ---
+────────────────────────────────────────────────────────────────────────────
+                                                  第 11 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    451 | 
+    452 | def list_alert_rules() -> List[AlertRule]:
+    453 |     return alert_rules_store
+    454 | 
+    455 | 
+    456 | def create_alert_rule(data: AlertRuleCreate) -> AlertRule:
+    457 |     rule = AlertRule(id=str(uuid.uuid4())[:8], **data.dict())
+    458 |     alert_rules_store.append(rule)
+    459 |     return rule
+    460 | 
+    461 | 
+    462 | def update_alert_rule(rule_id: str, data: AlertRuleCreate) -> Optional[AlertRule]:
+    463 |     for i, rule in enumerate(alert_rules_store):
+    464 |         if rule.id == rule_id:
+    465 |             alert_rules_store[i] = AlertRule(
+    466 |                 id=rule_id, device_id=data.device_id, metric=data.metric,
+    467 |                 warning_threshold=data.warning_threshold,
+    468 |                 critical_threshold=data.critical_threshold, enabled=data.enabled,
+    469 |             )
+    470 |             return alert_rules_store[i]
+    471 |     return None
+    472 | 
+    473 | 
+    474 | def delete_alert_rule(rule_id: str) -> bool:
+    475 |     for i, rule in enumerate(alert_rules_store):
+    476 |         if rule.id == rule_id:
+    477 |             alert_rules_store.pop(i)
+    478 |             return True
+    479 |     return False
+    480 | 
+    481 | 
+    482 | # --- 历史数据查询 ---
+    483 | 
+    484 | def query_sensor_data(device_id: Optional[str] = None,
+    485 |                        start_time: Optional[str] = None,
+    486 |                        end_time: Optional[str] = None,
+    487 |                        limit: int = 100) -> List[Dict[str, Any]]:
+    488 |     data = sensor_data_store
+    489 |     if device_id:
+    490 |         data = [d for d in data if d["device_id"] == device_id]
+    491 |     if start_time:
+    492 |         data = [d for d in data if d["timestamp"] >= start_time]
+    493 |     if end_time:
+    494 |         data = [d for d in data if d["timestamp"] <= end_time]
+    495 |     return data[-limit:]
+    496 | 
+    497 | 
+    498 | def export_sensor_data_csv(device_id: Optional[str] = None,
+    499 |                             start_time: Optional[str] = None,
+    500 |                             end_time: Optional[str] = None) -> str:
+────────────────────────────────────────────────────────────────────────────
+                                                  第 12 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    501 |     data = query_sensor_data(device_id, start_time, end_time, limit=10000)
+    502 |     output = io.StringIO()
+    503 |     writer = csv.writer(output)
+    504 |     writer.writerow(["device_id", "timestamp", "temperature", "humidity"])
+    505 |     for d in data:
+    506 |         writer.writerow([
+    507 |             d["device_id"], d["timestamp"],
+    508 |             d["sensors"].get("temperature", ""),
+    509 |             d["sensors"].get("humidity", ""),
+    510 |         ])
+    511 |     return output.getvalue()
+    512 | 
+    513 | 
+    514 | # --- 数据报表 ---
+    515 | 
+    516 | def build_daily_report(date_str: str, device_id: str) -> Optional[ReportDaily]:
+    517 |     start = f"{date_str}T00:00:00"
+    518 |     end = f"{date_str}T23:59:59"
+    519 |     data = query_sensor_data(device_id, start, end, limit=10000)
+    520 |     if not data:
+    521 |         return None
+    522 | 
+    523 |     temps = [numeric_value(d["sensors"].get("temperature")) for d in data]
+    524 |     hums = [numeric_value(d["sensors"].get("humidity")) for d in data]
+    525 |     temps = [t for t in temps if t is not None]
+    526 |     hums = [h for h in hums if h is not None]
+    527 | 
+    528 |     alert_count = sum(1 for a in alerts_store
+    529 |                       if a.device_id == device_id and a.event_at[:10] == date_str)
+    530 | 
+    531 |     return ReportDaily(
+    532 |         date=date_str, device_id=device_id,
+    533 |         max_temperature=max(temps) if temps else None,
+    534 |         min_temperature=min(temps) if temps else None,
+    535 |         avg_temperature=round(sum(temps) / len(temps), 2) if temps else None,
+    536 |         max_humidity=max(hums) if hums else None,
+    537 |         min_humidity=min(hums) if hums else None,
+    538 |         avg_humidity=round(sum(hums) / len(hums), 2) if hums else None,
+    539 |         alert_count=alert_count,
+    540 |         sample_count=len(data),
+    541 |     )
+    542 | 
+    543 | 
+    544 | def build_weekly_report(start_date: str, end_date: str, device_id: str) -> List[ReportDaily]:
+    545 |     from datetime import date, timedelta
+    546 |     reports = []
+    547 |     try:
+    548 |         d = date.fromisoformat(start_date)
+    549 |         end = date.fromisoformat(end_date)
+    550 |         while d <= end:
+────────────────────────────────────────────────────────────────────────────
+                                                  第 13 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    551 |             report = build_daily_report(d.isoformat(), device_id)
+    552 |             if report:
+    553 |                 reports.append(report)
+    554 |             d += timedelta(days=1)
+    555 |     except ValueError:
+    556 |         pass
+    557 |     return reports
+    558 | 
+    559 | 
+    560 | # --- 审计日志 ---
+    561 | 
+    562 | def add_audit_log(user: str, action: str, resource: str,
+    563 |                    resource_id: str, detail: str = "", ip: str = "") -> AuditLog:
+    564 |     log = AuditLog(
+    565 |         id=str(uuid.uuid4())[:8], user=user, action=action,
+    566 |         resource=resource, resource_id=resource_id, detail=detail,
+    567 |         timestamp=isoformat_utc(), ip=ip,
+    568 |     )
+    569 |     audit_logs_store.append(log)
+    570 |     return log
+    571 | 
+    572 | 
+    573 | def query_audit_logs(user: Optional[str] = None,
+    574 |                       action: Optional[str] = None,
+    575 |                       resource: Optional[str] = None,
+    576 |                       limit: int = 100) -> List[AuditLog]:
+    577 |     data = audit_logs_store
+    578 |     if user:
+    579 |         data = [d for d in data if d.user == user]
+    580 |     if action:
+    581 |         data = [d for d in data if d.action == action]
+    582 |     if resource:
+    583 |         data = [d for d in data if d.resource == resource]
+    584 |     data.sort(key=lambda x: x.timestamp, reverse=True)
+    585 |     return data[:limit]
+    586 | 
+    587 | 
+    588 | # --- 通知渠道 ---
+    589 | 
+    590 | def list_notification_channels() -> List[NotificationChannel]:
+    591 |     return notification_channels_store
+    592 | 
+    593 | 
+    594 | def create_notification_channel(name: str, channel_type: str,
+    595 |                                  config: Dict[str, str],
+    596 |                                  alert_level: str = "warning") -> NotificationChannel:
+    597 |     ch = NotificationChannel(
+    598 |         id=str(uuid.uuid4())[:8], name=name, channel_type=channel_type,
+    599 |         config=config, alert_level=alert_level,
+    600 |     )
+────────────────────────────────────────────────────────────────────────────
+                                                  第 14 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    601 |     notification_channels_store.append(ch)
+    602 |     return ch
+    603 | 
+    604 | 
+    605 | def update_notification_channel(channel_id: str, **kwargs) -> Optional[NotificationChannel]:
+    606 |     for i, ch in enumerate(notification_channels_store):
+    607 |         if ch.id == channel_id:
+    608 |             for k, v in kwargs.items():
+    609 |                 setattr(notification_channels_store[i], k, v)
+    610 |             return notification_channels_store[i]
+    611 |     return None
+    612 | 
+    613 | 
+    614 | def delete_notification_channel(channel_id: str) -> bool:
+    615 |     for i, ch in enumerate(notification_channels_store):
+    616 |         if ch.id == channel_id:
+    617 |             notification_channels_store.pop(i)
+    618 |             return True
+    619 |     return False
+    620 |            # ====== backend/main.py ======
+    620 | """
+    621 | 冷链数据监测平台 - 后端 API v3.0
+    622 | """
+    623 | import os
+    624 | import uuid
+    625 | from datetime import datetime, timedelta, timezone
+    626 | from typing import Any, Dict, List, Optional
+    627 | 
+    628 | from fastapi import FastAPI, Header, HTTPException, Query
+    629 | from fastapi.middleware.cors import CORSMiddleware
+    630 | from fastapi.responses import PlainTextResponse
+    631 | 
+    632 | from backend.auth import create_token, hash_password, verify_password, verify_token
+    633 | from backend.models import (
+    634 |     AlertRuleCreate, DeviceCreate, DeviceSnapshot, LoginRequest,
+    635 |     LoginResponse, SensorDataIn, UserCreate, UserOut,
+    636 | )
+    637 | from backend.services import (
+    638 |     add_audit_log, build_daily_report,
+    639 |     build_weekly_report, classify_status, create_alert_rule,
+    640 |     create_device, create_notification_channel, delete_alert_rule,
+    641 |     delete_device, delete_notification_channel, export_sensor_data_csv,
+    642 |     get_latest_records, list_alert_rules, list_devices,
+    643 |     list_notification_channels, numeric_value, query_audit_logs,
+    644 |     query_sensor_data, seed_demo_data, store_sensor_record,
+    645 |     update_alert_rule, update_device, update_notification_channel,
+    646 |     utc_now, isoformat_utc, _get_effective_threshold,
+    647 | )
+    648 | from backend.stores import (
+    649 |     alert_rules_store, alerts_store, audit_logs_store, clear_all,
+    650 |     devices_store, notification_channels_store, sensor_data_store,
+────────────────────────────────────────────────────────────────────────────
+                                                  第 15 页
+
+────────────────────────────────────────────────────────────────────────────
+软件名称: 冷链数据监测平台        版本号: V1.0
+                              代码说明文档（第1-14页）
+────────────────────────────────────────────────────────────────────────────
+    651 |     system_settings, users_store,
+    652 | )
+    653 | 
+    654 | 
+    655 | def parse_bool(value: Optional[str], default: bool = False) -> bool:
+    656 |     if value is None:
+    657 |         return default
+    658 |     return value.strip().lower() in {"1", "true", "yes", "on"}
+    659 | 
+    660 | 
+    661 | def parse_origins(value: Optional[str]) -> List[str]:
+    662 |     defaults = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    663 |     if not value:
+    664 |         return defaults
+    665 |     origins = [s.strip() for s in value.split(",") if s.strip()]
+    666 |     return origins or defaults
+    667 | 
+    668 | 
+    669 | class Settings:
+    670 |     def __init__(self):
+    671 |         self.backend_host = os.getenv("BACKEND_HOST", "0.0.0.0")
+    672 |         self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
+    673 |         self.frontend_origins = parse_origins(os.getenv("FRONTEND_ORIGINS"))
+    674 |         self.online_window_minutes = int(os.getenv("ONLINE_WINDOW_MINUTES", "10"))
+    675 |         self.enable_demo_seed = parse_bool(os.getenv("ENABLE_DEMO_SEED"), True)
+    676 |         self.enable_dev_tools = parse_bool(os.getenv("ENABLE_DEV_TOOLS"), True)
+    677 |         self.dashboard_trend_limit = int(os.getenv("DASHBOARD_TREND_LIMIT", "12"))
+    678 | 
+    679 | 
+    680 | settings = Settings()
+    681 | 
+    682 | app = FastAPI(title="冷链数据监测平台 API", version="3.0.0")
+    683 | app.add_middleware(
+    684 |     CORSMiddleware,
+    685 |     allow_origins=settings.frontend_origins,
+    686 |     allow_credentials=False,
+    687 |     allow_methods=["*"],
+    688 |     allow_headers=["*"],
+    689 | )
+    690 | 
+    691 | 
+    692 | # ─── Auth helpers ────────────────────────────────────────────────
+    693 | 
+    694 | def get_current_user(authorization: str = Header("")) -> Optional[Dict[str, Any]]:
+    695 |     if not authorization.startswith("Bearer "):
+    696 |         return None
+    697 |     token = authorization[7:]
+    698 |     return verify_token(token)
+    699 | 
+    700 | 
+────────────────────────────────────────────────────────────────────────────
+                                                  第 16 页

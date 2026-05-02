@@ -1,0 +1,804 @@
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+def parse_origins(value: Optional[str]) -> List[str]:
+    defaults = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    if not value:
+        return defaults
+    origins = [s.strip() for s in value.split(",") if s.strip()]
+    return origins or defaults
+
+
+class Settings:
+    def __init__(self):
+        self.backend_host = os.getenv("BACKEND_HOST", "0.0.0.0")
+        self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
+        self.frontend_origins = parse_origins(os.getenv("FRONTEND_ORIGINS"))
+        self.online_window_minutes = int(os.getenv("ONLINE_WINDOW_MINUTES", "10"))
+        self.enable_demo_seed = parse_bool(os.getenv("ENABLE_DEMO_SEED"), True)
+        self.enable_dev_tools = parse_bool(os.getenv("ENABLE_DEV_TOOLS"), True)
+        self.dashboard_trend_limit = int(os.getenv("DASHBOARD_TREND_LIMIT", "12"))
+
+
+settings = Settings()
+
+app = FastAPI(title="冷链数据监测平台 API", version="3.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.frontend_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+----------------------------------------------------------------------------
+                                                  第31页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+
+# ─── Auth helpers ────────────────────────────────────────────────
+
+def get_current_user(authorization: str = Header("")) -> Optional[Dict[str, Any]]:
+    if not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    return verify_token(token)
+
+
+def require_admin(authorization: str = Header("")) -> Dict[str, Any]:
+    user = get_current_user(authorization)
+    if user is None:
+        raise HTTPException(401, "未登录或登录已过期")
+    if user.get("role") != "admin":
+        raise HTTPException(403, "需要管理员权限")
+    return user
+
+
+def optional_user(authorization: str = Header("")) -> Optional[Dict[str, Any]]:
+    return get_current_user(authorization)
+
+
+# ─── Startup ─────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def startup():
+    if settings.enable_demo_seed:
+        seed_demo_data()
+        # 创建默认管理员
+----------------------------------------------------------------------------
+                                                  第32页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+        if "admin" not in users_store:
+            from backend.models import User as UserModel
+            users_store["admin"] = UserModel(
+                id=str(uuid.uuid4())[:8], username="admin",
+                password_hash=hash_password("admin123"),
+                role="admin", created_at=isoformat_utc(),
+            )
+
+
+# ─── 认证 ────────────────────────────────────────────────────────
+
+@app.post("/api/auth/register")
+def register(data: UserCreate):
+    if not data.username or not data.password:
+        raise HTTPException(400, "用户名和密码不能为空")
+    if data.username in users_store:
+        raise HTTPException(409, "用户名已存在")
+    from backend.models import User as UserModel
+    user = UserModel(
+        id=str(uuid.uuid4())[:8], username=data.username,
+        password_hash=hash_password(data.password),
+        role=data.role, created_at=isoformat_utc(),
+    )
+    users_store[data.username] = user
+    return UserOut(id=user.id, username=user.username, role=user.role, created_at=user.created_at)
+
+
+@app.post("/api/auth/login", response_model=LoginResponse)
+def login(data: LoginRequest):
+    user = users_store.get(data.username)
+----------------------------------------------------------------------------
+                                                  第33页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    if not user or not verify_password(data.password, user.password_hash):
+        raise HTTPException(401, "用户名或密码错误")
+    token = create_token({"sub": user.username, "role": user.role, "id": user.id})
+    return LoginResponse(
+        token=token,
+        user=UserOut(id=user.id, username=user.username, role=user.role, created_at=user.created_at),
+    )
+
+
+@app.get("/api/auth/me")
+def get_me(authorization: str = Header("")):
+    user = get_current_user(authorization)
+    if not user:
+        raise HTTPException(401, "未登录")
+    return user
+
+
+@app.get("/api/users")
+def list_users():
+    return [UserOut(id=u.id, username=u.username, role=u.role, created_at=u.created_at)
+            for u in users_store.values()]
+
+
+# ─── 传感器数据 ───────────────────────────────────────────────────
+
+@app.post("/api/sensor/data")
+async def receive_sensor_data(data: SensorDataIn):
+    """采集传感器数据"""
+    record = store_sensor_record(
+        data.device_id,
+----------------------------------------------------------------------------
+                                                  第34页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+        isoformat_utc(data.timestamp),
+        data.sensors.dict(),
+    )
+    return {
+        "status": "success", "message": "数据接收成功",
+        "device_id": record["device_id"], "timestamp": record["timestamp"],
+    }
+
+
+@app.get("/api/sensor/data")
+async def query_data(
+    device_id: Optional[str] = Query(None),
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
+    limit: int = Query(100),
+):
+    return query_sensor_data(device_id, start_time, end_time, limit)
+
+
+@app.get("/api/sensor/data/{device_id}")
+async def get_device_data(device_id: str, limit: int = 100):
+    data = [d for d in sensor_data_store if d["device_id"] == device_id]
+    return data[-limit:]
+
+
+@app.get("/api/sensor/data/export/csv")
+async def export_csv(
+    device_id: Optional[str] = Query(None),
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
+----------------------------------------------------------------------------
+                                                  第35页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+):
+    csv_content = export_sensor_data_csv(device_id, start_time, end_time)
+    return PlainTextResponse(csv_content, media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=sensor-data.csv"})
+
+
+@app.get("/api/sensor/latest")
+async def get_latest():
+    latest = {}
+    for did, record in get_latest_records().items():
+        latest[did] = {**record, "status": classify_status(record["sensors"])}
+    return latest
+
+
+# ─── 告警 ─────────────────────────────────────────────────────────
+
+@app.get("/api/alerts")
+async def get_alerts(limit: int = 50):
+    alerts = sorted(alerts_store, key=lambda a: a.created_at, reverse=True)
+    return [a.dict() for a in alerts[:limit]]
+
+
+# ─── 统计 ─────────────────────────────────────────────────────────
+
+@app.get("/api/stats")
+async def get_stats():
+    temps = [numeric_value(d["sensors"].get("temperature")) for d in sensor_data_store]
+    hums = [numeric_value(d["sensors"].get("humidity")) for d in sensor_data_store]
+    temps = [t for t in temps if t is not None]
+    hums = [h for h in hums if h is not None]
+----------------------------------------------------------------------------
+                                                  第36页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    return {
+        "total_records": len(sensor_data_store),
+        "avg_temperature": round(sum(temps) / len(temps), 2) if temps else 0.0,
+        "avg_humidity": round(sum(hums) / len(hums), 2) if hums else 0.0,
+        "alert_count": len(alerts_store),
+    }
+
+
+# ─── 仪表盘 ───────────────────────────────────────────────────────
+
+def compute_summary():
+    online_cutoff = utc_now() - timedelta(minutes=settings.online_window_minutes)
+    online = sum(
+        1 for r in get_latest_records().values()
+        if datetime.fromisoformat(r["timestamp"]) >= online_cutoff
+    )
+    temps = [numeric_value(d["sensors"].get("temperature")) for d in sensor_data_store]
+    hums = [numeric_value(d["sensors"].get("humidity")) for d in sensor_data_store]
+    temps = [t for t in temps if t is not None]
+    hums = [h for h in hums if h is not None]
+    return {
+        "online_devices": online,
+        "total_records": len(sensor_data_store),
+        "avg_temperature": round(sum(temps) / len(temps), 2) if temps else 0.0,
+        "avg_humidity": round(sum(hums) / len(hums), 2) if hums else 0.0,
+        "alert_count": len(alerts_store),
+    }
+
+
+def build_trends(limit: int):
+----------------------------------------------------------------------------
+                                                  第37页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    latest = get_latest_records()
+    device_ids = sorted(latest.keys())
+    series = []
+    for did in device_ids:
+        records = [r for r in sensor_data_store if r["device_id"] == did]
+        points = [
+            {"timestamp": r["timestamp"],
+             "temperature": numeric_value(r["sensors"].get("temperature")),
+             "humidity": numeric_value(r["sensors"].get("humidity"))}
+            for r in records[-limit:]
+        ]
+        series.append({"device_id": did, "points": points})
+    return {"selected_device_id": device_ids[0] if device_ids else None, "series": series}
+
+
+@app.get("/api/dashboard")
+def get_dashboard(limit: int = 12, alert_limit: int = 8):
+    snapshots = []
+    for record in get_latest_records().values():
+        sensors = record["sensors"]
+        snapshots.append(DeviceSnapshot(
+            device_id=record["device_id"], timestamp=record["timestamp"],
+            temperature=numeric_value(sensors.get("temperature")),
+            humidity=numeric_value(sensors.get("humidity")),
+            status=classify_status(sensors), sensors=sensors,
+        ))
+    snapshots.sort(key=lambda x: x.device_id)
+    alerts = sorted(alerts_store, key=lambda a: a.created_at, reverse=True)
+    return {
+        "summary": compute_summary(),
+----------------------------------------------------------------------------
+                                                  第38页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+        "devices": [s.dict() for s in snapshots],
+        "alerts": [a.dict() for a in alerts[:alert_limit]],
+        "trends": build_trends(max(1, limit)),
+    }
+
+
+# ─── 设备管理 ─────────────────────────────────────────────────────
+
+@app.get("/api/devices")
+async def get_devices():
+    return [d.dict() for d in list_devices()]
+
+
+@app.post("/api/devices")
+async def add_device(data: DeviceCreate):
+    if data.device_id in devices_store:
+        raise HTTPException(409, "设备ID已存在")
+    dev = create_device(data)
+    return dev.dict()
+
+
+@app.put("/api/devices/{device_id}")
+async def edit_device(device_id: str, data: DeviceCreate):
+    dev = update_device(device_id, data)
+    if not dev:
+        raise HTTPException(404, "设备不存在")
+    return dev.dict()
+
+
+@app.delete("/api/devices/{device_id}")
+----------------------------------------------------------------------------
+                                                  第39页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+async def remove_device(device_id: str):
+    if not delete_device(device_id):
+        raise HTTPException(404, "设备不存在")
+    return {"message": "设备已删除"}
+
+
+# ─── 告警规则 ─────────────────────────────────────────────────────
+
+@app.get("/api/alert-rules")
+async def get_alert_rules():
+    return [r.dict() for r in list_alert_rules()]
+
+
+@app.post("/api/alert-rules")
+async def add_alert_rule(data: AlertRuleCreate):
+    rule = create_alert_rule(data)
+    return rule.dict()
+
+
+@app.put("/api/alert-rules/{rule_id}")
+async def edit_alert_rule(rule_id: str, data: AlertRuleCreate):
+    rule = update_alert_rule(rule_id, data)
+    if not rule:
+        raise HTTPException(404, "规则不存在")
+    return rule.dict()
+
+
+@app.delete("/api/alert-rules/{rule_id}")
+async def remove_alert_rule(rule_id: str):
+    if not delete_alert_rule(rule_id):
+----------------------------------------------------------------------------
+                                                  第40页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+        raise HTTPException(404, "规则不存在")
+    return {"message": "规则已删除"}
+
+
+# ─── 数据报表 ─────────────────────────────────────────────────────
+
+@app.get("/api/reports/daily")
+async def daily_report(date: str, device_id: str):
+    report = build_daily_report(date, device_id)
+    if not report:
+        raise HTTPException(404, "指定日期无数据")
+    return report.dict()
+
+
+@app.get("/api/reports/weekly")
+async def weekly_report(start_date: str, end_date: str, device_id: str):
+    reports = build_weekly_report(start_date, end_date, device_id)
+    return [r.dict() for r in reports]
+
+
+# ─── 审计日志 ─────────────────────────────────────────────────────
+
+@app.get("/api/audit-logs")
+async def get_audit_logs(
+    user: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    resource: Optional[str] = Query(None),
+    limit: int = Query(100),
+):
+    return [l.dict() for l in query_audit_logs(user, action, resource, limit)]
+----------------------------------------------------------------------------
+                                                  第41页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+
+
+# ─── 系统设置 ─────────────────────────────────────────────────────
+
+@app.get("/api/settings")
+async def get_settings():
+    return system_settings.dict()
+
+
+@app.put("/api/settings")
+async def update_settings(data: dict):
+    for k, v in data.items():
+        if hasattr(system_settings, k):
+            setattr(system_settings, k, v)
+    return system_settings.dict()
+
+
+# ─── 通知渠道 ─────────────────────────────────────────────────────
+
+@app.get("/api/notification-channels")
+async def get_channels():
+    return [c.dict() for c in list_notification_channels()]
+
+
+@app.post("/api/notification-channels")
+async def add_channel(data: dict):
+    ch = create_notification_channel(
+        name=data["name"], channel_type=data["channel_type"],
+        config=data.get("config", {}),
+        alert_level=data.get("alert_level", "warning"),
+----------------------------------------------------------------------------
+                                                  第42页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    )
+    return ch.dict()
+
+
+@app.put("/api/notification-channels/{channel_id}")
+async def edit_channel(channel_id: str, data: dict):
+    ch = update_notification_channel(channel_id, **data)
+    if not ch:
+        raise HTTPException(404, "渠道不存在")
+    return ch.dict()
+
+
+@app.delete("/api/notification-channels/{channel_id}")
+async def remove_channel(channel_id: str):
+    if not delete_notification_channel(channel_id):
+        raise HTTPException(404, "渠道不存在")
+    return {"message": "渠道已删除"}
+
+
+# ─── 开发工具 ─────────────────────────────────────────────────────
+
+if settings.enable_dev_tools:
+    @app.delete("/api/clear")
+    async def clear_data():
+        clear_all()
+        return {"message": "所有数据已清除"}
+
+
+# ─── 根路径 ───────────────────────────────────────────────────────
+
+----------------------------------------------------------------------------
+                                                  第43页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+@app.get("/")
+def root():
+    return {
+        "message": "冷链数据监测平台 API",
+        "version": "3.0.0",
+        "mode": "demo" if settings.enable_demo_seed else "live",
+        "modules": [
+            "sensor-data", "device-management", "alert-rules",
+            "history-query", "data-reports", "user-auth",
+            "audit-logs", "system-settings", "notification-channels",
+        ],
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host=settings.backend_host, port=settings.backend_port)
+#!/usr/bin/env python3
+"""
+冷链数据采集器
+支持硬件模式和本地 mock 模式。
+"""
+
+from datetime import datetime, timezone
+import math
+import os
+import random
+import time
+from typing import Any, Dict, Optional, Tuple
+
+----------------------------------------------------------------------------
+                                                  第44页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+import requests
+
+try:
+    import board
+    import adafruit_dht
+except ImportError:
+    board = None
+    adafruit_dht = None
+
+
+def parse_bool(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000/api/sensor/data")
+DEVICE_ID = os.getenv("DEVICE_ID", "sensor_001")
+UPLOAD_INTERVAL = int(os.getenv("UPLOAD_INTERVAL", "30"))
+SENSOR_MOCK_MODE = parse_bool(os.getenv("SENSOR_MOCK_MODE"), default=True)
+DHT_PIN_NAME = os.getenv("DHT_PIN", "D4")
+
+
+def resolve_pin() -> Any:
+    if board is None:
+        return None
+    return getattr(board, DHT_PIN_NAME, None)
+
+
+def create_sensor_context() -> Tuple[Any, bool]:
+----------------------------------------------------------------------------
+                                                  第45页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    if SENSOR_MOCK_MODE:
+        return None, True
+
+    if board is None or adafruit_dht is None:
+        print("未检测到硬件依赖，自动回退到 mock 模式。")
+        return None, True
+
+    pin = resolve_pin()
+    if pin is None:
+        print(f"无效的 DHT 引脚配置: {DHT_PIN_NAME}，自动回退到 mock 模式。")
+        return None, True
+
+    try:
+        return adafruit_dht.DHT11(pin), False
+    except Exception as exc:
+        print(f"初始化传感器失败，自动回退到 mock 模式: {exc}")
+        return None, True
+
+
+def mock_temperature_humidity() -> Dict[str, float]:
+    timestamp = time.time() / 60.0
+    temperature = 5.5 + math.sin(timestamp / 2.0) * 2.8 + random.uniform(-0.4, 0.4)
+    humidity = 78.0 + math.cos(timestamp / 2.7) * 9.0 + random.uniform(-1.5, 1.5)
+    return {
+        "temperature": round(temperature, 1),
+        "humidity": round(humidity, 1),
+    }
+
+
+def read_temperature_humidity(sensor_device: Any, use_mock: bool) -> Optional[Dict[str, float]]:
+----------------------------------------------------------------------------
+                                                  第46页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    if use_mock:
+        return mock_temperature_humidity()
+
+    try:
+        temperature = sensor_device.temperature
+        humidity = sensor_device.humidity
+        if temperature is None or humidity is None:
+            return None
+        return {
+            "temperature": float(temperature),
+            "humidity": float(humidity),
+        }
+    except Exception as exc:
+        print(f"读取温湿度失败: {exc}")
+        return None
+
+
+def read_gpio_status() -> Dict[str, int]:
+    return {"gpio_1": 0, "gpio_2": 1}
+
+
+def collect_data(sensor_device: Any, use_mock: bool) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "device_id": DEVICE_ID,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "sensors": {},
+    }
+
+    th_data = read_temperature_humidity(sensor_device, use_mock)
+    if th_data:
+----------------------------------------------------------------------------
+                                                  第47页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+        data["sensors"]["temperature"] = th_data["temperature"]
+        data["sensors"]["humidity"] = th_data["humidity"]
+
+    data["sensors"].update(read_gpio_status())
+    return data
+
+
+def upload_data(data: Dict[str, Any], retries: int = 3) -> bool:
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.post(SERVER_URL, json=data, timeout=10)
+            if response.status_code == 200:
+                print(f"数据上传成功: {data['timestamp']}")
+                return True
+            print(f"数据上传失败: HTTP {response.status_code}")
+        except requests.RequestException as exc:
+            print(f"上传错误(第 {attempt} 次): {exc}")
+
+        if attempt < retries:
+            time.sleep(attempt)
+
+    return False
+
+
+def main() -> None:
+    sensor_device, use_mock = create_sensor_context()
+
+    print("=" * 50)
+    print("冷链数据采集器启动")
+    print(f"设备ID: {DEVICE_ID}")
+----------------------------------------------------------------------------
+                                                  第48页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    print(f"上传地址: {SERVER_URL}")
+    print(f"上传间隔: {UPLOAD_INTERVAL}秒")
+    print(f"运行模式: {'MOCK' if use_mock else 'HARDWARE'}")
+    print("=" * 50)
+
+    while True:
+        try:
+            data = collect_data(sensor_device, use_mock)
+            print(f"\n[{data['timestamp']}]")
+            print(f"  温度: {data['sensors'].get('temperature', 'N/A')}°C")
+            print(f"  湿度: {data['sensors'].get('humidity', 'N/A')}%")
+            upload_data(data)
+            time.sleep(UPLOAD_INTERVAL)
+        except KeyboardInterrupt:
+            print("\n采集器停止")
+            break
+        except Exception as exc:
+            print(f"运行错误: {exc}")
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()
+import importlib
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+----------------------------------------------------------------------------
+                                                  第49页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+
+@pytest.fixture()
+def api_module(monkeypatch):
+    monkeypatch.setenv("ENABLE_DEMO_SEED", "false")
+    monkeypatch.setenv("ENABLE_DEV_TOOLS", "true")
+    if "backend.main" in sys.modules:
+        del sys.modules["backend.main"]
+    module = importlib.import_module("backend.main")
+    importlib.reload(module)
+    module.sensor_data_store.clear()
+    module.alerts_store.clear()
+    yield module
+    module.sensor_data_store.clear()
+    module.alerts_store.clear()
+
+
+@pytest.fixture()
+def client(api_module):
+    with TestClient(api_module.app) as test_client:
+        yield test_client
+
+
+def test_zero_values_are_counted(client):
+    payload = {
+        "device_id": "sensor_zero",
+        "timestamp": "2026-03-29T00:00:00+00:00",
+----------------------------------------------------------------------------
+                                                  第50页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+        "sensors": {"temperature": 0, "humidity": 0, "gpio_1": 0},
+    }
+    response = client.post("/api/sensor/data", json=payload)
+    assert response.status_code == 200
+
+    stats = client.get("/api/stats")
+    assert stats.status_code == 200
+    data = stats.json()
+    assert data["total_records"] == 1
+    assert data["avg_temperature"] == 0.0
+    assert data["avg_humidity"] == 0.0
+
+
+def test_latest_uses_timestamp_not_insert_order(client):
+    newer = {
+        "device_id": "sensor_order",
+        "timestamp": "2026-03-29T10:10:00+00:00",
+        "sensors": {"temperature": 3.2, "humidity": 70.0},
+    }
+    older = {
+        "device_id": "sensor_order",
+        "timestamp": "2026-03-29T10:00:00+00:00",
+        "sensors": {"temperature": 9.9, "humidity": 71.0},
+    }
+    assert client.post("/api/sensor/data", json=newer).status_code == 200
+    assert client.post("/api/sensor/data", json=older).status_code == 200
+
+    latest = client.get("/api/sensor/latest").json()
+    assert latest["sensor_order"]["timestamp"] == newer["timestamp"]
+    assert latest["sensor_order"]["sensors"]["temperature"] == newer["sensors"]["temperature"]
+----------------------------------------------------------------------------
+                                                  第51页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+
+
+def test_alerts_include_metadata(client):
+    payload = {
+        "device_id": "sensor_hot",
+        "timestamp": "2026-03-29T11:00:00+00:00",
+        "sensors": {"temperature": 12.5, "humidity": 91.0},
+    }
+    assert client.post("/api/sensor/data", json=payload).status_code == 200
+
+    alerts = client.get("/api/alerts?limit=10")
+    assert alerts.status_code == 200
+    data = alerts.json()
+    assert len(data) == 2
+    assert all(item["created_at"] for item in data)
+    assert all(item["threshold"] for item in data)
+    assert all(item["current_value"] for item in data)
+
+
+def test_dashboard_response_shape(client):
+    payload = {
+        "device_id": "sensor_dash",
+        "timestamp": "2026-03-29T12:00:00+00:00",
+        "sensors": {"temperature": 4.2, "humidity": 75.0},
+    }
+    assert client.post("/api/sensor/data", json=payload).status_code == 200
+
+    response = client.get("/api/dashboard")
+    assert response.status_code == 200
+    data = response.json()
+----------------------------------------------------------------------------
+                                                  第52页
+
+软件名称: 冷链数据监测平台        版本号: V1.0
+代码说明文档（后30页）
+----------------------------------------------------------------------------
+    assert "summary" in data
+    assert "devices" in data
+    assert "alerts" in data
+    assert "trends" in data
+    assert data["summary"]["online_devices"] == 1
+    assert data["devices"][0]["device_id"] == "sensor_dash"
+    assert data["trends"]["series"][0]["device_id"] == "sensor_dash"
+----------------------------------------------------------------------------
+                                                  第53页
